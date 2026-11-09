@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="A clear space to organize your development tasks.">
+    <title>DevFlow | Task dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
+</head>
+<body>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <header class="site-header">
+        <div class="header-inner">
+            <a class="brand" href="{{ url_for('dashboard') }}" aria-label="DevFlow dashboard">
+                <span class="brand-mark" aria-hidden="true">D</span> DevFlow
+            </a>
+            <span class="workspace-label">Public demo · shared tasks</span>
+        </div>
+    </header>
+    <main id="main-content" class="dashboard" tabindex="-1">
+        <section class="page-heading" aria-labelledby="page-title">
+            <p class="eyebrow">A little focus. Steady progress.</p>
+            <h1 id="page-title">Your development tasks</h1>
+            <p class="muted">Make room for what you want to build next.</p>
+        </section>
+
+        <section aria-label="Task summary">
+            <dl class="summary-grid">
+                <div class="summary-card"><dt>Total tasks</dt><dd id="total-count" aria-label="Not available">&mdash;</dd><dd class="summary-description">Everything on your list</dd></div>
+                <div class="summary-card"><dt><span class="dot pending" aria-hidden="true"></span>Pending</dt><dd id="pending-count" aria-label="Not available">&mdash;</dd><dd class="summary-description">Ready for your next step</dd></div>
+                <div class="summary-card"><dt><span class="dot completed" aria-hidden="true"></span>Completed</dt><dd id="completed-count" aria-label="Not available">&mdash;</dd><dd class="summary-description">Progress worth celebrating</dd></div>
+            </dl>
+        </section>
+
+        <section class="panel add-panel" aria-labelledby="add-title">
+            <h2 id="add-title">What’s next?</h2>
+            <p id="dashboard-notice" class="muted">Public demo: everyone can view, edit, or delete these shared tasks. Use demonstration data only; do not enter personal or confidential information.</p>
+            <form id="task-form" aria-describedby="dashboard-notice" novalidate>
+                <fieldset id="task-fields" disabled>
+                    <legend class="visually-hidden">Add a task</legend>
+                    <div class="add-controls">
+                        <div class="field"><label for="task-name">Task name</label><input id="task-name" name="name" type="text" required aria-describedby="create-feedback" placeholder="What would you like to work on?"></div>
+                        <button id="add-task" type="submit" class="primary-button">Add task</button>
+                    </div>
+                </fieldset>
+            </form>
+            <p id="create-feedback" role="status" aria-live="polite" aria-atomic="true"></p>
+        </section>
+
+        <section class="panel task-panel" aria-labelledby="tasks-title">
+            <div class="section-heading"><h2 id="tasks-title">Task list</h2><span class="section-caption">One step at a time</span></div>
+            <fieldset id="task-filters" disabled class="task-toolbar">
+                <legend class="visually-hidden">Search and filter tasks</legend>
+                <div class="filter-group" role="group" aria-label="Filter by status">
+                    <button id="filter-all" type="button" aria-pressed="true" data-filter="all">All</button>
+                    <button id="filter-pending" type="button" aria-pressed="false" data-filter="pending">Pending</button>
+                    <button id="filter-completed" type="button" aria-pressed="false" data-filter="completed">Completed</button>
+                </div>
+                <div class="search-field"><label for="task-search">Search tasks</label><div class="search-controls"><input id="task-search" type="search" placeholder="Search by task name"><button id="clear-search" type="button">Clear search</button></div></div>
+            </fieldset>
+            <div id="task-feedback" role="status" aria-live="polite" aria-atomic="true"></div>
+            <button id="retry-tasks" type="button" hidden>Retry loading tasks</button>
+            <div id="task-list" class="task-list" aria-busy="true"></div>
+            <noscript><p class="workspace-state">Enable JavaScript to view your tasks.</p></noscript>
+        </section>
+        <footer class="page-footer">DevFlow <span aria-hidden="true">&middot;</span> Build a little, every day.</footer>
+    </main>
+</body>
+</html>

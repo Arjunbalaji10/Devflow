@@ -1,0 +1,69 @@
+# Python environments and generated artifacts
+venv/
+.venv/
+.venv-linux/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# Local databases, backups, and SQLite journals
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db.*
+*.sqlite.*
+*.sqlite3.*
+backups/
+
+# Secrets and local environment configuration
+.env
+.env.*
+*.env
+*.env.*
+.envrc
+.secrets/
+secrets/
+secrets.*
+credentials.*
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+.aws/
+.ssh/
+*.log
+
+# Temporary files, editor recovery files, and runtime process artifacts
+/tmp/
+/temp/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+*.pid
+*.sock
+*.ctl
+
+# Local editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Standalone learning exercise, outside the public application
+/oop_practice.py

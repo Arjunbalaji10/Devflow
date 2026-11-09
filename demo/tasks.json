@@ -1,0 +1,10 @@
+[
+  {"name": "Learn Python", "status": "completed"},
+  {"name": "Understand APIs", "status": "pending"},
+  {"name": "Learn SQL", "status": "pending"},
+  {"name": "Build a responsive task list", "status": "pending"},
+  {"name": "Add keyboard navigation", "status": "completed"},
+  {"name": "Write API regression tests", "status": "completed"},
+  {"name": "Review error handling", "status": "pending"},
+  {"name": "Prepare a portfolio walkthrough", "status": "pending"}
+]
