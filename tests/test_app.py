@@ -229,13 +229,13 @@ def test_dashboard_shell(test_context):
     assert read_tasks(test_context) == before
 
 
-def test_home_preserved_with_dashboard(test_context):
+def test_home_redirects_to_dashboard_when_access_is_disabled(test_context):
     client, _, _ = test_context
 
     response = client.get("/")
 
-    assert response.status_code == 200
-    assert response.get_data(as_text=True) == "Welcome to DevFlow API!"
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/dashboard")
 
 
 def test_dashboard_loads_frontend_modules(test_context):

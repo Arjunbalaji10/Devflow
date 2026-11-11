@@ -181,6 +181,25 @@ def test_dashboard_redirects_and_login_rotates_session_and_csrf(protected_contex
     assert client.get("/dashboard").status_code == 200
 
 
+def test_root_redirects_unauthenticated_user_to_login(protected_context):
+    _, client = protected_context
+
+    response = client.get("/")
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/login")
+
+
+def test_root_redirects_authenticated_user_to_dashboard(protected_context):
+    _, client = protected_context
+    assert login(client).status_code == 303
+
+    response = client.get("/")
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/dashboard")
+
+
 def test_login_requires_pre_authentication_csrf(protected_context):
     _, client = protected_context
     assert client.post("/login", data={"password": TEST_PASSWORD}).status_code == 403

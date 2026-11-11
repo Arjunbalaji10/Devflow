@@ -107,7 +107,9 @@ def delete_task(task_id):
 
 @app.route("/")
 def home():
-    return "Welcome to DevFlow API!"
+    if not authenticated():
+        return redirect(url_for("login"))
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/login", methods=["GET", "POST"])

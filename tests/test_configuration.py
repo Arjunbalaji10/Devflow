@@ -33,7 +33,9 @@ def test_import_does_not_connect_create_or_seed(monkeypatch):
     loaded = runpy.run_path(str(SOURCE))
     app = loaded["app"]
     assert not app.debug
-    assert app.test_client().get("/").status_code == 200
+    root_response = app.test_client().get("/")
+    assert root_response.status_code == 302
+    assert root_response.headers["Location"].endswith("/dashboard")
     assert app.test_client().get("/dashboard").status_code == 200
     assert "init_db" not in loaded
     connect.assert_not_called()
