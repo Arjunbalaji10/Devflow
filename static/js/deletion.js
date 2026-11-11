@@ -1,4 +1,4 @@
-import { deleteTask } from './api.js';
+import { csrfToken, deleteTask } from './api.js';
 
 const pendingDeletions = new Set();
 
@@ -23,7 +23,7 @@ export function addTaskDeletion(document, row, task, refresh, fetchRequest,
         const feedback = document.getElementById('task-feedback');
         feedback.textContent = 'Deleting task…';
         try {
-            await deleteTask(task.id, fetchRequest);
+            await deleteTask(task.id, fetchRequest, csrfToken(document));
             const refreshed = await refresh();
             feedback.textContent = refreshed ? 'Task deleted successfully.'
                 : 'Task deleted, but the list could not refresh. Use Retry loading tasks.';

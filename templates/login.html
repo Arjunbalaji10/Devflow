@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Sign in to the DevFlow shared demonstration.">
+    <title>DevFlow | Sign in</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body class="login-page">
+    <main class="login-panel" aria-labelledby="login-title">
+        <a class="brand" href="{{ url_for('home') }}" aria-label="DevFlow home">
+            <span class="brand-mark" aria-hidden="true">D</span> DevFlow
+        </a>
+        <p class="eyebrow">Shared demonstration</p>
+        <h1 id="login-title">Enter the demo password</h1>
+        <p class="muted">This workspace is shared by everyone who has access. Use demonstration data only.</p>
+        <form method="post" action="{{ url_for('login') }}">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+            <div class="field">
+                <label for="password">Password</label>
+                <input id="password" name="password" type="password" required autofocus autocomplete="current-password" aria-describedby="login-error">
+            </div>
+            <button type="submit" class="primary-button">Sign in</button>
+        </form>
+        <p id="login-error" class="auth-error" role="alert">{{ error or '' }}</p>
+    </main>
+</body>
+</html>

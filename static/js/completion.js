@@ -1,4 +1,4 @@
-import { setTaskStatus } from './api.js';
+import { csrfToken, setTaskStatus } from './api.js';
 
 // Keep the same task locked even if another action refreshes its DOM row.
 const pendingUpdates = new Map();
@@ -28,7 +28,7 @@ export function addTaskCompletion(document, row, task, refresh, fetchRequest) {
         const feedback = document.getElementById('task-feedback');
         feedback.textContent = 'Updating task status…';
         try {
-            await setTaskStatus(task.id, status, fetchRequest);
+            await setTaskStatus(task.id, status, fetchRequest, csrfToken(document));
             const refreshed = await refresh();
             feedback.textContent = refreshed ? `Task marked ${status}.`
                 : 'Task status updated, but the list could not refresh. Use Retry loading tasks.';

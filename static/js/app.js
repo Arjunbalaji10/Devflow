@@ -1,4 +1,4 @@
-import { createTask, getTasks } from './api.js';
+import { createTask, csrfToken, getTasks } from './api.js';
 import { addTaskEditor } from './editing.js';
 import { addTaskCompletion } from './completion.js';
 import { addTaskDeletion } from './deletion.js';
@@ -142,7 +142,7 @@ export function setupTaskCreation(document, fetchRequest = globalThis.fetch) {
         button.textContent = 'Adding…';
         feedback.textContent = 'Adding task…';
         try {
-            await createTask(input.value, fetchRequest);
+            await createTask(input.value, fetchRequest, csrfToken(document));
             input.value = '';
             const refreshed = await loadTasks(document, fetchRequest);
             feedback.textContent = refreshed ? 'Task created successfully.'

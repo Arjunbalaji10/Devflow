@@ -9,3 +9,5 @@ blinker==1.9.0
 colorama==0.4.6; platform_system == "Windows"
 gunicorn==26.2.0; platform_system != "Windows"
 packaging==26.3
+psycopg[binary]==3.3.8
+tzdata==2026.6; platform_system == "Windows"

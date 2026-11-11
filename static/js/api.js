@@ -1,13 +1,36 @@
+export function csrfToken(document) {
+    return document?.querySelector?.('meta[name="csrf-token"]')?.content || '';
+}
+
+function authenticatedOptions(options = {}) {
+    return { ...options, credentials: 'same-origin' };
+}
+
+function mutationHeaders(token, headers = {}) {
+    return { ...headers, 'X-CSRF-Token': token };
+}
+
+function rejectAccess(response) {
+    if (response.status === 401) {
+        globalThis.location?.assign?.('/login');
+        throw new Error('Your session expired. Sign in again.');
+    }
+    if (response.status === 403) {
+        throw new Error('The security token expired. Reload the page and try again.');
+    }
+}
+
 export async function getTasks(fetchRequest = globalThis.fetch) {
     let response;
     try {
-        response = await fetchRequest('/api/tasks', {
+        response = await fetchRequest('/api/tasks', authenticatedOptions({
             headers: { Accept: 'application/json' },
             cache: 'no-store',
-        });
+        }));
     } catch {
         throw new Error('Unable to connect. Check your connection and try again.');
     }
+    rejectAccess(response);
     if (!response.ok) {
         throw new Error('Unable to load tasks. Please try again.');
     }
@@ -28,19 +51,20 @@ export async function getTasks(fetchRequest = globalThis.fetch) {
     return data.tasks;
 }
 
-export async function createTask(name, fetchRequest = globalThis.fetch) {
+export async function createTask(name, fetchRequest = globalThis.fetch, token = '') {
     const trimmedName = name.trim();
     if (!trimmedName) throw new Error('Enter a task name.');
     let response;
     try {
-        response = await fetchRequest('/api/tasks', {
+        response = await fetchRequest('/api/tasks', authenticatedOptions({
             method: 'POST',
-            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+            headers: mutationHeaders(token, { Accept: 'application/json', 'Content-Type': 'application/json' }),
             body: JSON.stringify({ name: trimmedName }),
-        });
+        }));
     } catch {
         throw new Error('Could not confirm creation. Check the task list before trying again.');
     }
+    rejectAccess(response);
     if (!response.ok) throw new Error('Unable to create task. Please try again.');
     let data;
     try {
@@ -56,19 +80,20 @@ export async function createTask(name, fetchRequest = globalThis.fetch) {
     return data.task;
 }
 
-export async function renameTask(id, name, fetchRequest = globalThis.fetch) {
+export async function renameTask(id, name, fetchRequest = globalThis.fetch, token = '') {
     const trimmedName = name.trim();
     if (!trimmedName) throw new Error('Enter a task name.');
     let response;
     try {
-        response = await fetchRequest(`/api/tasks/${id}`, {
+        response = await fetchRequest(`/api/tasks/${id}`, authenticatedOptions({
             method: 'PATCH',
-            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+            headers: mutationHeaders(token, { Accept: 'application/json', 'Content-Type': 'application/json' }),
             body: JSON.stringify({ name: trimmedName }),
-        });
+        }));
     } catch {
         throw new Error('Could not confirm the update. Check the task list before trying again.');
     }
+    rejectAccess(response);
     if (!response.ok) throw new Error('Unable to save task. Please try again.');
     let data;
     try {
@@ -83,18 +108,19 @@ export async function renameTask(id, name, fetchRequest = globalThis.fetch) {
     return data.task;
 }
 
-export async function setTaskStatus(id, status, fetchRequest = globalThis.fetch) {
+export async function setTaskStatus(id, status, fetchRequest = globalThis.fetch, token = '') {
     if (!['pending', 'completed'].includes(status)) throw new Error('Invalid task status.');
     let response;
     try {
-        response = await fetchRequest(`/api/tasks/${id}`, {
+        response = await fetchRequest(`/api/tasks/${id}`, authenticatedOptions({
             method: 'PATCH',
-            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+            headers: mutationHeaders(token, { Accept: 'application/json', 'Content-Type': 'application/json' }),
             body: JSON.stringify({ status }),
-        });
+        }));
     } catch {
         throw new Error('Could not confirm the status update. Reload tasks before trying again.');
     }
+    rejectAccess(response);
     if (!response.ok) throw new Error('Unable to update status. Please try again.');
     let data;
     try {
@@ -109,16 +135,17 @@ export async function setTaskStatus(id, status, fetchRequest = globalThis.fetch)
     return data.task;
 }
 
-export async function deleteTask(id, fetchRequest = globalThis.fetch) {
+export async function deleteTask(id, fetchRequest = globalThis.fetch, token = '') {
     let response;
     try {
-        response = await fetchRequest(`/api/tasks/${id}`, {
+        response = await fetchRequest(`/api/tasks/${id}`, authenticatedOptions({
             method: 'DELETE',
-            headers: { Accept: 'application/json' },
-        });
+            headers: mutationHeaders(token, { Accept: 'application/json' }),
+        }));
     } catch {
         throw new Error('Could not confirm deletion. Reload tasks before trying again.');
     }
+    rejectAccess(response);
     if (response.status === 404) throw new Error('Task no longer exists. Reload tasks to update the list.');
     if (!response.ok) throw new Error('Unable to delete task. Please try again.');
     let data;

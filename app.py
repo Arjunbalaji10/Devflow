@@ -1,65 +1,18 @@
-﻿import sqlite3
-from pathlib import Path
-import os
+import psycopg
 
-from flask import Flask, g, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, url_for
+from access import (authenticated, clear_session, configure_access, csrf_token,
+                    establish_session, valid_csrf_token, verify_password)
+from database import get_db, init_app
 from security import configure_security
 
 app = Flask(__name__)
-app.config["DATABASE"] = Path(
-    os.environ.get("DEVFLOW_DATABASE") or Path(__file__).resolve().with_name("devflow.db")
-)
+init_app(app)
+configure_access(app)
 configure_security(app)
 
 
-def init_db():
-    """Initialize atomically; seed only when creating the tasks table."""
-    path = Path(app.config["DATABASE"])
-    connection = sqlite3.connect(path)
-    try:
-        with connection:
-            # Serialize first startup so concurrent imports cannot seed twice.
-            connection.execute("BEGIN IMMEDIATE")
-            has_tasks = connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'"
-            ).fetchone() is not None
-            connection.execute("""
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL CHECK (length(trim(name)) > 0),
-                    status TEXT NOT NULL DEFAULT 'pending'
-                        CHECK (status IN ('pending', 'completed'))
-                )
-            """)
-            if not has_tasks:
-                connection.executemany(
-                    "INSERT INTO tasks (id, name, status) VALUES (?, ?, ?)",
-                    [
-                        (1, "Learn Python", "completed"),
-                        (2, "Understand APIs", "pending"),
-                        (3, "Learn SQL", "pending"),
-                    ],
-                )
-    finally:
-        connection.close()
-
-
-def get_db():
-    """Reuse one connection during a request."""
-    if "db" not in g:
-        g.db = sqlite3.connect(app.config["DATABASE"])
-        g.db.row_factory = sqlite3.Row
-    return g.db
-
-
-@app.teardown_appcontext
-def close_db(error=None):
-    connection = g.pop("db", None)
-    if connection is not None:
-        connection.close()
-
-
-@app.errorhandler(sqlite3.Error)
+@app.errorhandler(psycopg.Error)
 def database_error(error):
     return jsonify({"error": "Database operation failed"}), 500
 
@@ -91,12 +44,12 @@ def create_task():
         return jsonify({"error": "Task name is required"}), 400
 
     connection = get_db()
-    with connection:
+    with connection.transaction():
         cursor = connection.execute(
-            "INSERT INTO tasks (name, status) VALUES (?, ?)",
+            "INSERT INTO tasks (name, status) VALUES (%s, %s) RETURNING id, name, status",
             (name.strip(), "pending"),
         )
-        new_task = {"id": cursor.lastrowid, "name": name.strip(), "status": "pending"}
+        new_task = cursor.fetchone()
 
     return jsonify({"success": True, "task": new_task}), 201
 
@@ -109,11 +62,10 @@ def update_task(task_id):
         return jsonify({"error": "A JSON object is required"}), 400
 
     connection = get_db()
-    with connection:
-        # Start the transaction before reading to keep read/update atomic.
-        connection.execute("BEGIN IMMEDIATE")
+    with connection.transaction():
+        # Lock the row before reading to keep partial updates atomic.
         row = connection.execute(
-            "SELECT id, name, status FROM tasks WHERE id = ?", (task_id,)
+            "SELECT id, name, status FROM tasks WHERE id = %s FOR UPDATE", (task_id,)
         ).fetchone()
         if row is None:
             return jsonify({"error": "Task not found"}), 404
@@ -130,7 +82,7 @@ def update_task(task_id):
             task["status"] = data["status"]
 
         connection.execute(
-            "UPDATE tasks SET name = ?, status = ? WHERE id = ?",
+            "UPDATE tasks SET name = %s, status = %s WHERE id = %s",
             (task["name"], task["status"], task_id),
         )
 
@@ -141,15 +93,14 @@ def update_task(task_id):
 @app.route("/api/tasks/<int:task_id>", methods=["DELETE"])
 def delete_task(task_id):
     connection = get_db()
-    with connection:
-        connection.execute("BEGIN IMMEDIATE")
+    with connection.transaction():
         row = connection.execute(
-            "SELECT id, name, status FROM tasks WHERE id = ?", (task_id,)
+            "SELECT id, name, status FROM tasks WHERE id = %s FOR UPDATE", (task_id,)
         ).fetchone()
         if row is None:
             return jsonify({"error": "Task not found"}), 404
         deleted_task = dict(row)
-        connection.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        connection.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
 
     return jsonify({"success": True, "deleted_task": deleted_task}), 200
 
@@ -159,13 +110,55 @@ def home():
     return "Welcome to DevFlow API!"
 
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not app.config["ACCESS_ENABLED"] or authenticated():
+        return redirect(url_for("dashboard"))
+    error = None
+    retry_after = None
+    status = 200
+    if request.method == "POST":
+        if not valid_csrf_token(request.form.get("_csrf_token")):
+            error = "The login form expired. Please try again."
+            status = 403
+        else:
+            limiter = app.extensions["devflow_login_limiter"]
+            retry_after = limiter.retry_after()
+            if retry_after:
+                error = "Too many login attempts. Please try again later."
+                status = 429
+            elif verify_password(request.form.get("password")):
+                limiter.reset()
+                establish_session()
+                return redirect(url_for("dashboard"), code=303)
+            else:
+                limiter.record_failure()
+                error = "Invalid password."
+                status = 401
+    response = app.make_response((render_template(
+        "login.html", csrf_token=csrf_token(), error=error
+    ), status))
+    if retry_after:
+        response.headers["Retry-After"] = str(retry_after)
+    return response
+
+
+@app.post("/logout")
+def logout():
+    if app.config["ACCESS_ENABLED"]:
+        if not authenticated():
+            return redirect(url_for("login"), code=303)
+        if not valid_csrf_token(request.form.get("_csrf_token")):
+            return jsonify({"error": "Invalid CSRF token"}), 403
+        clear_session()
+    return redirect(url_for("login"), code=303)
+
+
 @app.route("/dashboard")
 def dashboard():
-    return render_template("dashboard.html")
+    return render_template("dashboard.html", csrf_token=csrf_token(),
+                           access_enabled=app.config["ACCESS_ENABLED"])
 
-
-# Initialize for both direct execution and Flask/WSGI imports.
-init_db()
 
 if __name__ == "__main__":
     app.run()

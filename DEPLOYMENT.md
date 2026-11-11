@@ -1,238 +1,90 @@
-# DevFlow Version 1 production configuration
+# DevFlow production deployment
 
-Version 1 is a public portfolio demonstration with one shared task collection.
-Anyone can read, create, edit, complete, or delete demonstration tasks. There are
-no accounts or private workspaces. Use demonstration data only; never upload a
-personal database, confidential information, credentials, or private task names.
+This document describes the current PostgreSQL, shared-authentication, and Render architecture. It is preparation only: do not deploy, change hosted settings, or touch production data without separate authorization.
 
-This document prepares deployment. It does not provision or deploy a service.
+## Runtime architecture
 
-## Database configuration
+DevFlow runs as a Render Python Web Service behind Render's managed TLS ingress. Gunicorn serves Flask over the service's internal HTTP connection. Flask uses managed Render PostgreSQL in the same region through its internal URL. Application data is not stored on the web-service filesystem, so a Render persistent disk is neither required nor appropriate for the current runtime.
 
-- Set `DEVFLOW_DATABASE` to an absolute SQLite file path in production, for example
-  `/var/data/devflow.db`. The parent directory must already exist and be writable.
-- If the variable is absent or empty, the local default remains `devflow.db`
-  beside `app.py`, independent of the current working directory.
-- Relative configured paths are relative to the process working directory.
-- Configuration is read when `app` is imported. Restart after changing it.
-- An invalid or inaccessible path fails startup; there is no silent fallback to
-  another database. Do not create a database directory during the build.
-- Initialization runs on import, inside a SQLite write transaction. A new tasks
-  table receives three demonstration tasks. Existing tables, including empty
-  tables after deletion, are preserved. Concurrent initializers serialize rather
-  than inserting duplicate seeds. This is not a schema migration mechanism.
-
-## Runtime and startup
-
-Install production dependencies on Linux from the repository root:
-
-```sh
-python -m pip install -r requirements.txt
-```
-
-Flask and its dependencies retain the inspected environment's versions. Gunicorn
-is the only new server dependency, pinned to 26.2.0. Its requirement is excluded on
-Windows because Gunicorn requires Unix (or WSL). Pin the hosting Python version
-explicitly after testing it on Linux; the local test environment uses 3.14.7.
-
-Render configuration for a later authorized deployment:
+Required release configuration:
 
 | Setting | Value |
 | --- | --- |
-| Service | Python Web Service, paid instance with persistent disk |
+| Runtime | Python pinned by `.python-version` |
 | Build command | `pip install -r requirements.txt` |
-| Start command | `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --access-logfile - --error-logfile -` |
-| Disk mount | `/var/data` |
-| Environment | `DEVFLOW_DATABASE=/var/data/devflow.db` |
-| Health check | `/` (HTTP availability; does not check database access) |
-| Dashboard | `/dashboard` |
+| Pre-deploy command | `python migrate.py` |
+| Start command | `python start_production.py` |
+| Database | Managed Render PostgreSQL, same region, internal URL |
+| `DATABASE_URL` | Private environment value; PostgreSQL URL only |
+| `DEVFLOW_ACCESS_PASSWORD_HASH` | Private Werkzeug scrypt hash |
+| `DEVFLOW_SESSION_SECRET` | Private random value, at least 32 characters |
 
-The existing WSGI entry point is `app:app`. Start one synchronous worker initially
-for this small shared SQLite demonstration. Flask continues serving templates
-and `/static/` assets; there is no frontend build or separate frontend server.
+Do not set the obsolete `DEVFLOW_DATABASE`. Do not put URLs, password hashes, plaintext passwords, or session secrets in Git, commands captured in reports, or logs. `migrate.py` is the only schema-change path; application import and startup never migrate or seed the database. Pre-deploy commands are unavailable on some Render plans, so plan eligibility is a release prerequisite.
 
-Do not use `python app.py` or `flask run` as the production server. Direct local
-startup no longer forces debug mode. Leave `FLASK_DEBUG` unset or set it to `0`
-in production; do not enable a debugger or reloader in the Gunicorn command.
-No secret key is needed by the current session-free application. Do not commit
-environment secrets or add a placeholder production secret.
+`start_production.py` requires Linux, validates `PORT`, database configuration, and access configuration before execing Gunicorn. It rejects command-line arguments, clears `GUNICORN_CMD_ARGS`, `FORWARDED_ALLOW_IPS`, and `WEB_CONCURRENCY`, forces production access behavior, and uses the checked-in Gunicorn config. That config fixes one sync worker and one thread, with reload and application preload disabled. Keep one worker until process-local API and login limits are replaced with a shared store.
 
-## Persistence and release checks
+## Render HTTPS proxy trust and HSTS
 
-Render's ordinary filesystem is ephemeral. A free service cannot attach a
-persistent disk. Only data below the mounted disk path survives restarts and
-redeployments. The disk is available at runtime, not during builds or pre-deploy
-commands. Keep one service instance; disk-backed deploys have downtime.
+Render terminates HTTPS at its managed load balancer and forwards the request to the web service over internal HTTP. Render's Python runtime documents `FORWARDED_ALLOW_IPS=*`, but Render does not publish a stable ingress-proxy CIDR that can be placed in Gunicorn's IP allowlist. Therefore the checked-in policy is:
 
-Start production with a fresh database of demonstration data, rather than copying
-the local database. Maintain consistent SQLite backups using SQLite's backup API
-and verify restoration; never reset a live database as part of normal startup.
-Exclude local databases, virtual environments, caches, and secrets when preparing
-the source repository for deployment.
+- when `RENDER=true`, set Gunicorn `forwarded_allow_ips = "*"` and recognize only the exact `X-Forwarded-Proto: https` secure-scheme signal;
+- everywhere else, set `forwarded_allow_ips = ""`, so direct and local clients cannot change `request.is_secure` with forwarded headers;
+- do not add Flask `ProxyFix`, do not use `X-Forwarded-For` for authorization or the current shared rate limits, and do not accept launcher overrides.
 
-Before deployment, run the complete suites from the project root:
+This is a platform-bound trust decision, not a claim that wildcard proxy trust is safe on a generally reachable Gunicorn server. It is safe only while Render is the exclusive public ingress, strips or overwrites client-supplied forwarding headers, and the service's private network is restricted to trusted services in the same workspace/environment. If any untrusted service can connect directly over the Render private network, isolate it before release or use a proxy boundary with a stable allowlist. Do not copy the Render setting to local or self-hosted runs.
+
+The application emits `Strict-Transport-Security: max-age=31536000` only when Flask sees the request as secure. With empty proxy trust, Render HTTPS would look like HTTP to Flask and HSTS would be missing. With the Render-only policy, genuine HTTPS requests receive HSTS while local HTTP and spoofed direct requests do not. The policy intentionally omits `includeSubDomains` and `preload`; adding either would affect other hostnames and requires a separate domain-wide review. HSTS is enforced by browsers only after they receive it over a valid HTTPS response; it does not itself redirect a user's first HTTP request or replace Render's TLS and HTTP-to-HTTPS edge behavior.
+
+Before release, verify on the actual service that an HTTPS response contains the expected HSTS header and that Render overwrites a client-supplied `X-Forwarded-Proto: http`. Do not weaken the policy if that check fails; stop and investigate the platform path.
+
+Relevant upstream documentation:
+
+- [Render default environment variables](https://render.com/docs/environment-variables)
+- [Render web services](https://render.com/docs/web-services)
+- [Render private network](https://render.com/docs/private-network)
+- [Gunicorn forwarded-header settings](https://docs.gunicorn.org/en/stable/settings.html#forwarded-allow-ips)
+
+## PostgreSQL operations
+
+Use the managed database's internal URL and keep the web service and database in the same region. Restrict the database's external inbound rules; normal application traffic does not require the external URL. Preserve any TLS parameters supplied by Render.
+
+Run `python migrate.py` as the pre-deploy command. It uses a transaction-scoped advisory lock, verifies migration checksums/history, and applies pending numbered files atomically. Never edit an applied migration; add a new numbered migration. Concurrent application startup against an unmigrated schema fails rather than creating tables implicitly.
+
+Configure and rehearse Render PostgreSQL backups and a restore into a separate non-production database before release. Record retention and recovery objectives. The legacy ignored `devflow.db` is not a runtime file, but it may contain data; preserve it and any backups until a separately reviewed SQLite-to-PostgreSQL import and reconciliation is complete. Raw SQLite copies are not PostgreSQL backups and must not be deployed with the web service.
+
+## Authentication and public-demo limits
+
+Production fails closed unless both access values are present. The password hash must be a valid Werkzeug scrypt hash; the session secret must contain at least 32 characters. Authenticated sessions are host-only, Secure, HttpOnly, SameSite=Lax, and limited to eight hours. Login has a pre-authentication CSRF token; authenticated mutations require the rotated session CSRF token. Login and task responses are marked `no-store`.
+
+All authenticated visitors share one task collection. API and failed-login limits are process-local and intentionally paired with a single worker. They reset at restart and are basic safeguards, not distributed abuse prevention. Do not claim per-user privacy, authorization, or DDoS protection.
+
+## Release verification
+
+Use only a disposable loopback PostgreSQL database ending in `_test`. Never point tests at `DATABASE_URL` or a hosted database. The strict Linux procedure and exact tool versions are maintained in [POSTGRESQL_MIGRATION.md](POSTGRESQL_MIGRATION.md#exact-linux-python-31410-verification-commands). The required gate includes:
 
 ```sh
-python -m pytest -q
+python -m pytest -q -p no:cacheprovider
 node --test tests/frontend.test.mjs
+python tests/verify_production.py --require-pinned-runtime
 ```
 
-Pytest 9.2.0 and Node.js (tested locally with 24.21.0) are test tools, not production
-runtime dependencies. Pytest also invokes the JavaScript suite, so Node must be
-available in the test environment. A production-only install intentionally omits
-pytest. Run Gunicorn startup and HTTP smoke checks on Linux/WSL with a temporary
-database before claiming production-server verification.
+Require zero skipped PostgreSQL tests. The real-server harness checks the fixed launcher, migrations, authentication, CSRF, CRUD, PostgreSQL persistence and connection cleanup, security headers, limits, local TLS proxy behavior, and that untrusted local forwarded scheme headers remain ineffective. Its explicit loopback-trust case is test-only and must not become the normal local policy.
 
-After a later authorized deployment, verify static assets, CRUD, search, filters,
-and persistence through a restart and redeploy. Monitor usage and keep all data
-disposable.
+Final release verification completed on 2026-11-11 with Python 3.14.10 and a disposable loopback PostgreSQL 18.6 cluster: **183 Python tests passed with zero skipped**, **76 JavaScript tests passed with zero failed**, the strict production verification passed, and the Chromium browser verification passed.
 
-## Public security and abuse controls
+After a separately authorized Render deployment, verify:
 
-- All responses include a same-origin Content Security Policy, `nosniff`, frame
-  protection, a referrer policy, and disabled camera/microphone/geolocation access.
-  Inline scripts/styles, external scripts, and embedding are blocked. Existing
-  modules, CSS, and API fetches are same-origin and need no CSP exceptions.
-- HTTPS requests receive HSTS for one year, without subdomain coverage or preload.
-  HTTP development does not. Verify HTTPS detection through the actual hosting
-  proxy before release; do not blindly trust client-supplied forwarded headers.
-- Bodies are limited to 16 KiB. Oversized requests return JSON 413 errors. Existing
-  malformed JSON/field validation remains intact. This limits bytes, not name
-  characters; normal small CRUD payloads retain their contracts.
-- API traffic has process-wide fixed windows: 300 reads and 60 writes per 60
-  seconds. GET/HEAD share the read quota; other methods share the write quota,
-  except OPTIONS. Exhaustion returns JSON 429 with `Retry-After` seconds. Rejected
-  validation attempts also consume quota; limits apply before database work.
-- Static assets, the dashboard, and `/` do not consume API quotas. Declared
-  oversized bodies are rejected before quota accounting; oversized streamed API
-  bodies without a declared length consume quota before bounded reading rejects
-  them. Requests are not retried automatically.
-- The limiter stores only two counters, is thread-safe, and does not use forwarded
-  IP addresses. All visitors share quotas, including legitimate visitors behind
-  an abuser. Counters reset on process restart; multiple workers have independent
-  quotas. Retain the documented one-worker command. This is a modest abuse brake,
-  not distributed rate limiting or DDoS protection. Edge protection and monitoring
-  remain operational requirements for greater exposure. Fixed windows permit a
-  burst around a window boundary. No external limiter package or datastore is used.
-- No authentication is added: anyone can still edit or delete shared tasks.
-  Limits do not prevent sustained data growth, spam, or offensive user content.
-  No private or confidential information belongs in this demonstration.
+1. the deployed Python version matches `.python-version` and no conflicting `PYTHON_VERSION` override exists;
+2. migrations completed once and the application starts with one sync worker;
+3. unauthenticated API access is rejected and login/logout, CSRF, CRUD, static assets, and literal rendering work;
+4. HTTPS responses contain exactly `Strict-Transport-Security: max-age=31536000`;
+5. Render sanitizes client forwarding headers and direct private-network access is limited to trusted services;
+6. the application uses the internal PostgreSQL URL and survives a web-service restart without data loss;
+7. backup and restore monitoring is operational.
 
-## Clean source and demonstration data
+## Current release blockers
 
-`.gitignore` excludes virtual environments, caches, SQLite files and journals,
-backups, local environment files, private keys, credential files, and logs.
-Ignore rules do not remove already-tracked files or clean Git history. Before the
-first commit, inspect the staged file list and run a credential check. If a real
-credential has ever been committed, rotate it and clean history separately; never
-print its value in a report. Do not publish local SQLite files for review.
-
-For first production startup, choose a fresh file path on the persistent disk.
-The existing initializer creates only the three generic seed tasks. Never copy
-the local database. Startup preserves edits and does not periodically reset data.
-If demonstration data becomes unsuitable, stop the service, retain any needed
-backup securely, and explicitly choose a new database filename. Restart to seed
-the new file, then verify its contents before reopening access. This is an operator
-maintenance procedure, not a public reset endpoint or automatic deletion job.
-
-### Eight-task portfolio dataset
-
-[demo/tasks.json](demo/tasks.json) is the reviewed source dataset for a fuller
-portfolio demonstration: eight generic tasks, five pending and three completed.
-It contains no IDs, personal names, contact information, credentials, or binary
-database contents. Keep the JSON in source control; keep all SQLite files out.
-
-Preparation strategy for a later release:
-
-1. Choose a fresh database path on the persistent disk. Never overwrite or copy
-   the local `devflow.db`. If a target file already exists, inspect it separately
-   and choose a new filename rather than resetting it during preparation.
-2. Start the app with that path while the new service is not yet publicly
-   accessible. Its unchanged initializer creates the first three tasks listed
-   in the dataset. Confirm their names and statuses via `GET /api/tasks`.
-3. Add the remaining five tasks using `POST /api/tasks` with each task's name.
-   POST creates pending tasks. For each additional sample marked completed,
-   PATCH the returned ID with `{"status":"completed"}`. Do not hardcode IDs.
-4. Verify the full names/statuses against the JSON and confirm summary counts of
-   8 total, 5 pending, and 3 completed. Restart once and verify the collection.
-5. If interrupted, read the current collection first and reconcile it against
-   the dataset before adding more rows. Repeating POST blindly creates duplicates.
-   Keep public access closed until the reviewed dataset and counts are correct.
-
-This is an operator procedure using the existing API, not a new loader, seed
-change, reset endpoint, or automatic data replacement. No database is created or
-populated by repository preparation. The production/browser verification harnesses
-still use their own isolated three-task startup databases.
-
-## Linux production verification (Stage 9C)
-
-The reproducible production check is `tests/verify_production.py`. It launches the
-documented Gunicorn command with an ephemeral port and a fresh temporary SQLite
-file, without importing or modifying the local application database. Run it on
-Linux from the repository root after installing the pinned requirements:
-
-```sh
-verification_env=$(mktemp -d /tmp/devflow-verification.XXXXXX)
-python3 -m venv "$verification_env/venv"
-"$verification_env/venv/bin/python" -m pip install -r requirements.txt
-"$verification_env/venv/bin/python" tests/verify_production.py
-```
-
-The harness requires the existing system `openssl` executable to generate an
-ephemeral self-signed test certificate. It uses only Python standard-library
-verification code and adds no production dependencies. On Ubuntu installations
-without `ensurepip`, the isolated environment can be created with `--without-pip`
-and pip bootstrapped inside it using the official
-`https://bootstrap.pypa.io/get-pip.py`; do not install or change system Python.
-WSL temporary files may disappear after the distribution stops, so keep setup
-and verification in one Linux shell session.
-
-The harness checks real HTTP responses for routes, static module MIME types,
-CRUD, headers, the body limit, default API rate quotas and `Retry-After`. It restarts
-Gunicorn against the same temporary database, verifies saved changes and deleted
-rows, checks an empty database is not reseeded, and checks SQLite integrity. Each
-server's log is checked for tracebacks and ERROR/CRITICAL entries after shutdown.
-
-It also tests a real local TLS-terminating reverse proxy. That proxy overwrites
-forwarded scheme headers and reaches Gunicorn over trusted loopback. A separate
-Gunicorn run uses `--forwarded-allow-ips=` to prove an untrusted
-`X-Forwarded-Proto: https` cannot produce HSTS. These local checks do not verify
-Render's actual ingress or TLS certificate. At hosting verification time, identify
-the trusted ingress and confirm headers are sanitized. Never solve proxy issues
-by blindly trusting all forwarded sources or weakening the CSP.
-
-Run both full suites in that Linux environment, with Node 24.21.0 and Git available:
-
-```sh
-"$verification_env/venv/bin/python" -m pip install pytest==9.2.0
-"$verification_env/venv/bin/python" -m pytest -q
-node --test tests/frontend.test.mjs
-```
-
-Stage 9C's Linux environment used Python 3.14.4, Gunicorn 26.2.0, and the pinned
-production requirements. The Windows development Python remains 3.14.7. Verify
-the exact selected hosting Python patch before release rather than assuming every
-patch or Render's default has been tested. No WSL/Docker installation is required
-by these instructions; use an existing Linux environment.
-
-For an actual CSP check, start a separate local Gunicorn instance using a fresh
-temporary demonstration database. From a host with an already-installed Chromium
-browser and Node 24.21.0, run:
-
-```sh
-node tests/verify_browser.mjs /path/to/chrome http://127.0.0.1:18765/dashboard
-```
-
-On Windows, provide the quoted path to `chrome.exe`. The browser checker creates
-an isolated temporary browser profile, verifies real module/CSS/API loading and
-form creation, confirms an HTML-shaped task name stays text, and deliberately
-tests that an inline script is blocked. The checker requires exactly three seed
-tasks at startup and creates one disposable task. It must never target a live or
-personal database. Stop the temporary Gunicorn server after verification. It
-does not replace complete desktop/mobile interaction testing.
-
-References:
-- [Render Flask deployment](https://render.com/docs/deploy-flask)
-- [Render persistent disks](https://render.com/docs/disks)
-- [Flask Gunicorn guidance](https://flask.palletsprojects.com/en/stable/deploying/gunicorn/)
-- [Gunicorn release](https://pypi.org/project/gunicorn/26.2.0/)
+- Rehearse managed PostgreSQL backup and restore.
+- If legacy SQLite data must be retained, implement and verify the separately scoped export/import and identity-sequence reconciliation before cutover.
+- Confirm the Render plan supports the pre-deploy migration command.
+- Perform the post-deploy proxy/HSTS checks on the actual Render ingress; local tests cannot prove hosted header sanitization or private-network isolation.

@@ -1,44 +1,11 @@
 import importlib
-import sqlite3
+import psycopg
+from migrate import migrate
 from html.parser import HTMLParser
 
 import pytest
 from io import BytesIO
 import json
-
-
-@pytest.fixture
-def test_context(tmp_path, monkeypatch):
-    test_database = tmp_path / "test.db"
-    sqlite_connect = sqlite3.connect
-
-    def connect_to_test_database(database, *args, **kwargs):
-        return sqlite_connect(test_database, *args, **kwargs)
-
-    monkeypatch.setattr(sqlite3, "connect", connect_to_test_database)
-
-    app_module = importlib.import_module("app")
-    original_testing = app_module.app.config["TESTING"]
-    original_database = app_module.app.config["DATABASE"]
-    # Existing behavior tests do not share a process-wide public-demo quota.
-    monkeypatch.setitem(app_module.app.config, "RATE_LIMIT_ENABLED", False)
-
-    app_module.app.config.update(
-        TESTING=True,
-        DATABASE=test_database,
-    )
-
-    if test_database.exists():
-        test_database.unlink()
-    app_module.init_db()
-
-    try:
-        yield app_module.app.test_client(), test_database, sqlite_connect
-    finally:
-        app_module.app.config.update(
-            TESTING=original_testing,
-            DATABASE=original_database,
-        )
 
 
 def test_get_tasks(test_context):
@@ -54,7 +21,7 @@ def test_get_tasks(test_context):
 
 
 def test_create_task(test_context):
-    client, test_database, sqlite_connect = test_context
+    client, test_database, postgres_connect = test_context
     submitted_name = "Write POST test"
 
     response = client.post(
@@ -74,9 +41,9 @@ def test_create_task(test_context):
     assert task["name"] == submitted_name
     assert task["status"] == "pending"
 
-    with sqlite_connect(test_database) as connection:
+    with postgres_connect(test_database) as connection:
         saved_task = connection.execute(
-            "SELECT id, name, status FROM tasks WHERE id = ?",
+            "SELECT id, name, status FROM tasks WHERE id = %s",
             (task["id"],),
         ).fetchone()
 
@@ -88,8 +55,8 @@ def test_create_task(test_context):
 
 
 def read_tasks(test_context):
-    _, test_database, sqlite_connect = test_context
-    with sqlite_connect(test_database) as connection:
+    _, test_database, postgres_connect = test_context
+    with postgres_connect(test_database) as connection:
         return connection.execute(
             "SELECT id, name, status FROM tasks ORDER BY id"
         ).fetchall()
@@ -285,10 +252,10 @@ def test_dashboard_loads_frontend_modules(test_context):
 
 
 def test_task_api_preserves_names_as_json_data(test_context):
-    client, test_database, sqlite_connect = test_context
+    client, test_database, postgres_connect = test_context
     name = '<img src=x onerror="alert(1)">'
-    with sqlite_connect(test_database) as connection:
-        connection.execute("INSERT INTO tasks (name) VALUES (?)", (name,))
+    with postgres_connect(test_database) as connection:
+        connection.execute("INSERT INTO tasks (name) VALUES (%s)", (name,))
 
     response = client.get("/api/tasks")
 
@@ -413,7 +380,7 @@ def test_persistence_after_reinitialization_and_new_client(test_context):
     assert client.delete("/api/tasks/2").status_code == 200
     before_reload = read_tasks(test_context)
 
-    app_module.init_db()
+    migrate(test_context[1])
     fresh_client = app_module.app.test_client()
 
     assert read_tasks(test_context) == before_reload
@@ -431,7 +398,7 @@ def test_empty_database_is_not_reseeded_after_reload(test_context):
         assert client.delete(f"/api/tasks/{task_id}").status_code == 200
 
     app_module = importlib.import_module("app")
-    app_module.init_db()
+    migrate(test_context[1])
 
     assert read_tasks(test_context) == []
     assert app_module.app.test_client().get("/api/tasks").get_json() == {"success": True, "tasks": []}
@@ -449,7 +416,7 @@ def test_database_errors_are_json_and_preserve_data(test_context, monkeypatch, m
     app_module = importlib.import_module("app")
 
     def unavailable_database():
-        raise sqlite3.OperationalError("private database path")
+        raise psycopg.OperationalError("private database configuration")
 
     monkeypatch.setattr(app_module, "get_db", unavailable_database)
     response = client.open(path, method=method, json=payload)
@@ -637,7 +604,7 @@ def test_dashboard_discloses_shared_demo_data(test_context):
     client, _, _ = test_context
     html = client.get("/dashboard").get_data(as_text=True)
 
-    assert "everyone can view, edit, or delete these shared tasks" in html
+    assert "everyone with the password can view, edit, or delete these tasks" in html
     assert "do not enter personal or confidential information" in html
     assert "Your personal workspace" not in html
 

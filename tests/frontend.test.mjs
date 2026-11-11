@@ -30,6 +30,8 @@ function makeDocument() {
     return {
         getElementById: id => elements[id],
         createElement: tag => new Element(tag),
+        querySelector: selector => selector === 'meta[name="csrf-token"]'
+            ? { content: 'test-csrf-token' } : null,
     };
 }
 
@@ -51,6 +53,8 @@ test('creation trims input, sends POST JSON, refreshes rows and counts, and anno
     assert.equal(calls[0][0], '/api/tasks');
     assert.equal(calls[0][1].method, 'POST');
     assert.equal(calls[0][1].headers['Content-Type'], 'application/json');
+    assert.equal(calls[0][1].headers['X-CSRF-Token'], 'test-csrf-token');
+    assert.equal(calls[0][1].credentials, 'same-origin');
     assert.deepEqual(JSON.parse(calls[0][1].body), { name: 'Build dashboard' });
     assert.equal(calls[1][1].method ?? 'GET', 'GET');
     assert.deepEqual(countValues(doc), ['1', '1', '0']);
@@ -720,9 +724,37 @@ test('GET request uses the existing same-origin contract', async () => {
         assert.equal(url, '/api/tasks');
         assert.equal(options.method ?? 'GET', 'GET');
         assert.equal(options.headers.Accept, 'application/json');
+        assert.equal(options.credentials, 'same-origin');
         return { ok: true, json: async () => ({ success: true, tasks }) };
     });
     assert.deepEqual(result, tasks);
+});
+
+test('expired sessions redirect to login without exposing response details', async () => {
+    const previous = globalThis.location;
+    let destination;
+    globalThis.location = { assign: value => { destination = value; } };
+    try {
+        await assert.rejects(
+            getTasks(async () => ({ ok: false, status: 401 })),
+            /session expired/i,
+        );
+        assert.equal(destination, '/login');
+    } finally {
+        if (previous === undefined) delete globalThis.location;
+        else globalThis.location = previous;
+    }
+});
+
+test('CSRF rejection gives a reload instruction', async () => {
+    await assert.rejects(
+        createTask('Protected task', async (url, options) => {
+            assert.equal(url, '/api/tasks');
+            assert.equal(options.headers['X-CSRF-Token'], 'csrf-value');
+            return { ok: false, status: 403 };
+        }, 'csrf-value'),
+        /security token expired.*reload/i,
+    );
 });
 
 test('loading state is visible while a request is unresolved', async () => {

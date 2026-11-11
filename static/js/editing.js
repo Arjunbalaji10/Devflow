@@ -1,4 +1,4 @@
-import { renameTask } from './api.js';
+import { csrfToken, renameTask } from './api.js';
 
 const pendingEdits = new WeakMap();
 
@@ -76,7 +76,7 @@ export function addTaskEditor(document, row, name, task, refresh, fetchRequest) 
         form.setAttribute('aria-busy', 'true');
         feedback.textContent = 'Saving task…';
         try {
-            await renameTask(task.id, input.value, fetchRequest);
+            await renameTask(task.id, input.value, fetchRequest, csrfToken(document));
             const refreshed = await refresh();
             document.getElementById('task-feedback').textContent = refreshed
                 ? 'Task updated successfully.'
